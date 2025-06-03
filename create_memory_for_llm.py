@@ -1,5 +1,8 @@
 from langchain_community.document_loaders import PyPDFLoader, DirectoryLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_ollama import OllamaEmbeddings
+from langchain_community.vectorstores import FAISS
+
 
 
 # Step 1:clear(s)
@@ -26,3 +29,12 @@ def create_chunks(extracted_data):
 
 text_chunks=create_chunks(extracted_data=documents)
 print("Length of Text Chunks: ", len(text_chunks))
+
+# Step 3: Setup Embeddings Model (Use DeepSeek R1 with Ollama)
+ollama_model_name = "deepseek-r1:1.5b"
+
+def get_embedding_model():
+    embeddings = OllamaEmbeddings(model=ollama_model_name)
+    return embeddings
+
+embedding_model = get_embedding_model()
