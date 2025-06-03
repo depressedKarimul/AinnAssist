@@ -11,6 +11,7 @@ langchain-core = "*"
 langchain-groq = "*"
 faiss-cpu = "*"
 pdfplumber = "*"
+pypdf = "*"
 
 [dev-packages]
 
