@@ -9,3 +9,9 @@ To get started, make sure you have [Pipenv](https://pipenv.pypa.io/en/latest/) i
 pipenv install langchain langchain_community langchain_ollama langchain_core langchain_groq faiss-cpu pdfplumber
 
 ```
+After setting up the Pipenv environment, also install the pypdf library:
+
+```bash
+pip install pypdf
+
+```
