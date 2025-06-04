@@ -15,3 +15,14 @@ After setting up the Pipenv environment, also install the pypdf library:
 pip install pypdf
 
 ```
+
+🚀 Run the Script
+
+To initialize memory for the LLM, run:
+
+```bash
+
+pipenv run python create_memory_for_llm.py
+
+
+```
