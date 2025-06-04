@@ -37,6 +37,13 @@ pipenv shell
 
 Launch the Streamlit app:
 
+Install Streamlit (if not already installed):
+
+```bash
+pip install streamlit
+```
+Run the application:
+
 ```bash
 
 streamlit run app.py

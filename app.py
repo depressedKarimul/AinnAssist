@@ -15,10 +15,42 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OLLAMA_MODEL_NAME = "deepseek-r1:1.5b"
 DB_FAISS_PATH = "vectorstore/db_faiss"
 
-st.set_page_config(page_title="📚 AI Document Assistant", layout="wide")
+# === Page Configuration ===
+st.set_page_config(page_title="⚖️ AinnAssist – Navigate the Laws of Bangladesh", layout="wide")
 
-st.title("📚 AI Document Assistant")
-st.markdown("Ask questions based on uploaded PDF files.")
+# === Custom CSS for Styling ===
+st.markdown("""
+    <style>
+    .main {
+        background-color: #f5f7fb;
+        padding: 20px;
+    }
+    .block-container {
+        padding: 2rem 2rem 2rem;
+    }
+    .title-style {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #2c3e50;
+    }
+    .subtitle-style {
+        font-size: 1.2rem;
+        color: #555;
+        margin-top: -15px;
+    }
+    .stTextInput>div>div>input {
+        border: 1px solid #ccc;
+        padding: 10px;
+        border-radius: 6px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# === Header ===
+st.markdown('<div class="title-style">⚖️ AinnAssist – Navigate the Laws of Bangladesh</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle-style">AinnAssist is a smart legal companion that helps citizens of Bangladesh easily understand and access the country\'s laws, rights, and legal procedures — all in one place.</div>', unsafe_allow_html=True)
+
+st.divider()
 
 # === Utility: Remove <think>...</think> from output ===
 def strip_think_tags(text):
@@ -75,7 +107,7 @@ def process_pdf_files(uploaded_files):
 
 # === Upload Sidebar ===
 with st.sidebar:
-    st.header("📤 Upload PDFs")
+    st.header("📤 Upload Legal PDFs")
     uploaded_files = st.file_uploader("Upload PDF files", type=["pdf"], accept_multiple_files=True)
 
     if st.button("🔄 Process PDFs"):
@@ -84,23 +116,21 @@ with st.sidebar:
             os.makedirs("vectorstore", exist_ok=True)
             with st.spinner("Processing uploaded PDFs..."):
                 doc_count, chunk_count = process_pdf_files(uploaded_files)
-            st.success(f"✅ Processed {doc_count} documents into {chunk_count} chunks.")
+            st.success(f"✅ {doc_count} documents processed into {chunk_count} information chunks.")
         else:
             st.warning("⚠️ Please upload at least one PDF file.")
 
-# === Main Chat Interface ===
-st.divider()
-st.subheader("🤖 Ask a Question")
+# === Chat Interface ===
+st.subheader("💬 Ask a Legal Question")
+query = st.text_input("📌 Type your question about Bangladeshi law:")
 
-query = st.text_input("Enter your question:")
-
-if st.button("🧠 Get Answer") and query:
-    with st.spinner("Thinking..."):
+if st.button("🧠 Get Legal Insight") and query:
+    with st.spinner("Analyzing with AinnAssist..."):
         try:
             db = load_vector_store()
             llm = load_llm()
             response = answer_query(query, db, llm)
-            st.markdown("**Answer:**")
+            st.markdown("#### ✅ Answer")
             st.success(response)
         except Exception as e:
             st.error("❌ Something went wrong while generating the answer.")
