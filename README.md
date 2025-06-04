@@ -26,3 +26,11 @@ pipenv run python create_memory_for_llm.py
 
 
 ```
+activate the virtual environment first:
+
+```bash
+
+pipenv shell
+
+
+```
