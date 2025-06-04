@@ -1,3 +1,4 @@
+
 import os
 from langchain_community.document_loaders import PyPDFLoader, DirectoryLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -18,8 +19,8 @@ print(f"[INFO] Loaded {len(documents)} documents.")
 # === Step 2: Create Text Chunks ===
 def create_chunks(docs):
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=300,     # 🔄 Smaller chunk size to keep individual articles intact
-        chunk_overlap=30,   # ✅ Slight overlap for better semantic cohesion
+        chunk_size=1000,     # 🔄 Smaller chunk size to keep individual articles intact
+        chunk_overlap=200,   # ✅ Slight overlap for better semantic cohesion
     )
     chunks = splitter.split_documents(docs)
     return chunks
