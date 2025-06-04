@@ -34,3 +34,11 @@ pipenv shell
 
 
 ```
+
+Launch the Streamlit app:
+
+```bash
+
+streamlit run app.py
+
+```
