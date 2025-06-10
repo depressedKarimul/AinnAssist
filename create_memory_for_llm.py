@@ -19,8 +19,8 @@ print(f"[INFO] Loaded {len(documents)} documents.")
 # === Step 2: Create Text Chunks ===
 def create_chunks(docs):
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,     # 🔄 Smaller chunk size to keep individual articles intact
-        chunk_overlap=200,   # ✅ Slight overlap for better semantic cohesion
+        chunk_size=1000,    
+        chunk_overlap=200,   
     )
     chunks = splitter.split_documents(docs)
     return chunks

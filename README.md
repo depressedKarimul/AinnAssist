@@ -49,3 +49,17 @@ Run the application:
 streamlit run app.py
 
 ```
+
+Install FastAPI & Uvicorn
+
+```bash
+pip install fastapi uvicorn python-multipart
+
+```
+
+Run your API
+
+```bash
+uvicorn app:app --reload
+
+```
