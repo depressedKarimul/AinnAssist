@@ -135,8 +135,8 @@
 #         except Exception as e:
 #             st.error("❌ Something went wrong while generating the answer.")
 
-
 # app.py
+
 import re
 from fastapi import FastAPI, Response
 from pydantic import BaseModel
@@ -158,11 +158,27 @@ def root():
 def ask_question(data: QueryRequest):
     try:
         answer = answer_query(data.question)
-        # Remove <think>...</think> tags and content
-        cleaned_answer = re.sub(r"<think>.*?</think>", "", str(answer), flags=re.DOTALL)
+
+        # === Clean the LLM response ===
+        # 1. Remove <think>...</think> tags
+        cleaned = re.sub(r"<think>.*?</think>", "", str(answer), flags=re.DOTALL)
+
+        # 2. Remove everything before and including "content='"
+        cleaned = re.sub(r"^.*?content='", "", cleaned)
+
+        # 3. Remove everything after the last closing quote
+        cleaned = re.sub(r"'[\s\S]*$", "", cleaned)
+
+        # 4. Remove leading \n\n explicitly
+        cleaned = re.sub(r"^\n\n", "", cleaned)
+
+        # 5. Strip any remaining whitespace or newlines
+        cleaned_answer = cleaned.strip()
+
         return {
             "question": data.question,
-            "answer": cleaned_answer.strip()
+            "answer": cleaned_answer
         }
+
     except Exception as e:
         return {"error": str(e)}
