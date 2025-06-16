@@ -9,7 +9,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Messa
 AudioSegment.converter = "C:\\ffmpeg\\bin\\ffmpeg.exe"
 AudioSegment.ffprobe = "C:\\ffmpeg\\bin\\ffprobe.exe"
 
-BOT_TOKEN = "7700344272:AAHKvq4mn1Wd_fTRcldcA6-Vv1D5B4tNyTE"
+BOT_TOKEN = ""
 API_URL = "http://localhost:8000/ask"
 
 # === Start Command ===
