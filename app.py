@@ -135,7 +135,6 @@
 #         except Exception as e:
 #             st.error("❌ Something went wrong while generating the answer.")
 
-# app.py
 
 import re
 from fastapi import FastAPI, Response
@@ -157,22 +156,28 @@ def root():
 @app.post("/ask")
 def ask_question(data: QueryRequest):
     try:
-        answer = answer_query(data.question)
+        answer = str(answer_query(data.question))
 
         # === Clean the LLM response ===
-        # 1. Remove <think>...</think> tags
-        cleaned = re.sub(r"<think>.*?</think>", "", str(answer), flags=re.DOTALL)
+        #  Remove <think>...</think> tags
+        cleaned = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL)
 
-        # 2. Remove everything before and including "content='"
-        cleaned = re.sub(r"^.*?content='", "", cleaned)
+        #  Remove everything before and including content='
+        cleaned = re.sub(r"^.*?content='", "", cleaned, flags=re.DOTALL)
 
-        # 3. Remove everything after the last closing quote
+        #  Remove everything after the last closing single quote
         cleaned = re.sub(r"'[\s\S]*$", "", cleaned)
 
-        # 4. Remove leading \n\n explicitly
-        cleaned = re.sub(r"^\n\n", "", cleaned)
+        #  Remove additional_kwargs={}
+        cleaned = re.sub(r"additional_kwargs=\{\s*.*?\s*\}", "", cleaned)
 
-        # 5. Strip any remaining whitespace or newlines
+        #  Remove response_metadata={
+        cleaned = re.sub(r"response_metadata=\{\s*.*", "", cleaned)
+
+        #  Replace literal '\n' with actual newlines
+        cleaned = cleaned.replace(r'\n', '\n')
+
+        # Strip leading/trailing whitespace
         cleaned_answer = cleaned.strip()
 
         return {

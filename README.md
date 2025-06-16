@@ -63,3 +63,44 @@ Run your API
 uvicorn app:app --reload
 
 ```
+
+## Telegram Bot with Voice Message Support
+
+
+## 🛠️ Requirements
+
+### 1. Install FFmpeg
+
+#### Windows:
+
+- Download FFmpeg from the official site:  
+  [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+
+- Extract the folder and add its `bin` path (e.g., `C:\ffmpeg\bin`) to your system **Environment Variables > PATH**.
+
+To verify FFmpeg is installed:
+
+```bash
+
+ffmpeg -version
+
+```
+
+📦 Install Required Python Packages
+Go to your project folder and run:
+
+```bash
+
+pip install python-telegram-bot==20.3 pydub SpeechRecognition requests
+
+```
+
+🚀 Running the Bot
+After setting up everything, run the bot using:
+
+```bash
+
+python bot.py
+
+
+```

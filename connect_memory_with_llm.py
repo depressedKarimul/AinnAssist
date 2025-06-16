@@ -52,13 +52,14 @@ def get_context(documents):
 # === Step 4: Prompt and Response Generation ===
 custom_prompt_template = """
 Answer the question using only the information provided in the context.
-❗ Your response must be a short summary — no more than **2 concise sentences**. Do NOT explain your reasoning.
+❗ Do NOT explain your reasoning. Only provide a direct, clear answer based on the context.
 
 Question: {question}
 Context: {context}
 
-Final Answer (Max 2 sentences):
+Final Answer:
 """
+
 
 
 def answer_query(query):
@@ -73,4 +74,4 @@ def answer_query(query):
 if __name__ == "__main__":
     question = input("Ask a question: ")
     response = answer_query(question)
-    print("\nAI Lawyer:", response)
+    print("\nAI :", response)
