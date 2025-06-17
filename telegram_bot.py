@@ -2,6 +2,7 @@ import os
 import requests
 import speech_recognition as sr
 from pydub import AudioSegment
+from langdetect import detect
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
@@ -12,20 +13,37 @@ AudioSegment.ffprobe = "C:\\ffmpeg\\bin\\ffprobe.exe"
 BOT_TOKEN = ""
 API_URL = "http://localhost:8000/ask"
 
-# === Start Command ===
+# === Language Detection Utility ===
+def detect_language(text: str) -> str:
+    try:
+        return detect(text)
+    except:
+        return "unknown"
+
+def get_language_tag(lang_code: str) -> str:
+    return {
+        "bn": "🔤 Detected Language: Bangla 🇧🇩",
+        "en": "🔤 Detected Language: English 🇬🇧"
+    }.get(lang_code, "🔤 Detected Language: Unknown ❓")
+
+# === Bot Start Command ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Hello! Send a legal question as text or voice message.")
 
-# === Handle Text Messages ===
+# === Text Message Handler ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_question = update.message.text
+    lang = detect_language(user_question)
+    lang_tag = get_language_tag(lang)
+
     try:
         res = requests.post(API_URL, json={"question": user_question})
         answer = res.json().get("answer", "❌ Sorry, couldn't find an answer.")
-        await update.message.reply_text(f"📜 Answer:\n{answer}")
+        await update.message.reply_text(f"{lang_tag}\n\n📜 Answer:\n{answer}")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
-# === Handle Voice Messages ===
+
+# === Voice Message Handler ===
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await update.message.voice.get_file()
     file_path = "voice.ogg"
@@ -36,29 +54,59 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sound = AudioSegment.from_file(file_path)
     sound.export(wav_path, format="wav")
 
-    # Speech Recognition
     recognizer = sr.Recognizer()
     with sr.AudioFile(wav_path) as source:
         audio = recognizer.record(source)
 
+    # Try both languages
     try:
-        transcribed_text = recognizer.recognize_google(audio).strip()
+        bn_text = recognizer.recognize_google(audio, language="bn-BD")
+    except:
+        bn_text = ""
+    try:
+        en_text = recognizer.recognize_google(audio, language="en-US")
+    except:
+        en_text = ""
 
-        # Ensure the question ends with a '?'
-        if not transcribed_text.endswith("?"):
-            transcribed_text += "?"
+    bn_detected = detect_language(bn_text) if bn_text else "unknown"
+    en_detected = detect_language(en_text) if en_text else "unknown"
 
-        await update.message.reply_text(f"🗣 Transcribed: {transcribed_text}")
+    # Choose the best transcription based on langdetect and script
+    if en_detected == "en" and not bn_detected == "bn":
+        final_text = en_text
+        lang = "en"
+    elif bn_detected == "bn" and not en_detected == "en":
+        final_text = bn_text
+        lang = "bn"
+    elif en_text and bn_text:
+        # fallback: more ascii = likely English
+        en_score = sum(c.isascii() for c in en_text)
+        bn_score = sum(c.isascii() for c in bn_text)
+        if en_score >= bn_score:
+            final_text = en_text
+            lang = "en"
+        else:
+            final_text = bn_text
+            lang = "bn"
+    else:
+        await update.message.reply_text("❌ Could not understand the voice message.")
+        return
 
-        # Send to API
-        res = requests.post(API_URL, json={"question": transcribed_text})
+    if not final_text.endswith("?"):
+        final_text += "?"
+
+    lang_tag = get_language_tag(lang)
+    await update.message.reply_text(f"🗣 Transcribed: {final_text}\n{lang_tag}")
+
+    try:
+        res = requests.post(API_URL, json={"question": final_text})
         answer = res.json().get("answer", "❌ Sorry, couldn't find an answer.")
         await update.message.reply_text(f"📜 Answer:\n{answer}")
     except Exception as e:
-        await update.message.reply_text(f"❌ Voice processing error: {str(e)}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 
-# === Bot Main Setup ===
+# === Main ===
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
