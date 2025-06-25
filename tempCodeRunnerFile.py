@@ -1,1 +1,1 @@
-from langdetect import detect
+recognize_goog
