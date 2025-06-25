@@ -2,6 +2,9 @@ import os
 import requests
 import speech_recognition as sr
 from pydub import AudioSegment
+from PIL import Image
+import torch
+from transformers import BlipProcessor, BlipForConditionalGeneration
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -14,7 +17,6 @@ from dotenv import load_dotenv
 
 # === Load environment variables ===
 load_dotenv()
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_URL = os.getenv("API_URL")
 FFMPEG_PATH = os.getenv("FFMPEG_PATH")
@@ -23,6 +25,21 @@ FFPROBE_PATH = os.getenv("FFPROBE_PATH")
 # === Set FFmpeg path for pydub ===
 AudioSegment.converter = FFMPEG_PATH
 AudioSegment.ffprobe = FFPROBE_PATH
+
+# === Load BLIP image captioning model ===
+print("[INFO] Loading BLIP image captioning model...")
+processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+print("[INFO] BLIP model loaded.")
+
+# === Generate Caption from Image ===
+def generate_image_caption(image_path):
+    image = Image.open(image_path).convert("RGB")
+    inputs = processor(image, return_tensors="pt")
+    with torch.no_grad():
+        out = model.generate(**inputs)
+    caption = processor.decode(out[0], skip_special_tokens=True)
+    return caption.strip()
 
 # === Language Tag (for voice only) ===
 def get_language_tag(lang_code: str) -> str:
@@ -33,14 +50,13 @@ def get_language_tag(lang_code: str) -> str:
 
 # === /start Command ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Hello! Send a legal question as text or voice message.")
+    await update.message.reply_text("👋 Hello! Send your legal question as text, voice, or image.")
 
 # === Handle Text Message ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_question = update.message.text
-
+    question = update.message.text
     try:
-        res = requests.post(API_URL, json={"question": user_question})
+        res = requests.post(API_URL, json={"question": question})
         answer = res.json().get("answer", "❌ Sorry, couldn't find an answer.")
         await update.message.reply_text(f"📜 Answer:\n{answer}")
     except Exception as e:
@@ -49,12 +65,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === Handle Voice Message ===
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await update.message.voice.get_file()
-    file_path = "voice.ogg"
-    await file.download_to_drive(file_path)
-
-    # Convert OGG to WAV
+    ogg_path = "voice.ogg"
     wav_path = "voice.wav"
-    sound = AudioSegment.from_file(file_path)
+    await file.download_to_drive(ogg_path)
+
+    sound = AudioSegment.from_file(ogg_path)
     sound.export(wav_path, format="wav")
 
     recognizer = sr.Recognizer()
@@ -66,8 +81,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Could not understand the voice message.")
         return
-
-    print("Initial voice text:", raw_text)
 
     if raw_text.startswith("bangla") or raw_text.startswith("বাংলা"):
         try:
@@ -88,8 +101,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not final_text.endswith("?"):
         final_text += "?"
 
-    lang_tag = get_language_tag(lang)
-    await update.message.reply_text(f"🗣 Transcribed: {final_text}\n{lang_tag}")
+    await update.message.reply_text(f"🗣 Transcribed: {final_text}\n{get_language_tag(lang)}")
 
     try:
         res = requests.post(API_URL, json={"question": final_text})
@@ -98,12 +110,42 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
-# === Main Entry ===
+# === Handle Photo/Image Message ===
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo = update.message.photo[-1]  # highest resolution
+    image_path = "photo.jpg"
+    await (await photo.get_file()).download_to_drive(image_path)
+
+    try:
+        # Generate basic caption
+        caption = generate_image_caption(image_path)
+
+        # Create detailed prompt with legal question
+        detailed_prompt = (
+            f"Describe in detail what is happening in the following image:\n{caption}\n\n"
+            "Now, Based on this description, which law in Bangladesh is potentially being violated, and what type of punishment could apply under that law, including how many years of imprisonment or how much fine may be imposed?"
+        )
+
+        # Inform user what is being processed
+        await update.message.reply_text(f"🖼 Processing image and asking AI:\n{detailed_prompt}")
+
+        # Send prompt to FastAPI LLM
+        res = requests.post(API_URL, json={"question": detailed_prompt})
+        answer = res.json().get("answer", "❌ Sorry, couldn't find an answer.")
+
+        # Send answer to user
+        await update.message.reply_text(f"📜 AI Answer:\n{answer}")
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error processing image: {str(e)}")
+
+# === Main function to run the bot ===
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     print("🤖 Bot is running...")
     app.run_polling()
 
