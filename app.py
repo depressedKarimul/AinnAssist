@@ -136,6 +136,8 @@
 #             st.error("❌ Something went wrong while generating the answer.")
 
 
+
+
 import re
 from fastapi import FastAPI, Response
 from pydantic import BaseModel
@@ -156,25 +158,20 @@ def root():
 @app.post("/ask")
 def ask_question(data: QueryRequest):
     try:
-        answer = str(answer_query(data.question))
+        result = answer_query(data.question)
+        answer = str(result["answer"])
 
         # === Clean the LLM response ===
-        #  Remove <think>...</think> tags
+        # Remove <think>...</think> tags
         cleaned = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL)
 
-        #  Remove everything before and including content='
-        cleaned = re.sub(r"^.*?content='", "", cleaned, flags=re.DOTALL)
+        # Remove additional_kwargs={}
+        cleaned = re.sub(r"additional_kwargs=\{\s*.*?\s*\}", "", cleaned, flags=re.DOTALL)
 
-        #  Remove everything after the last closing single quote
-        cleaned = re.sub(r"'[\s\S]*$", "", cleaned)
+        # Remove response_metadata={...}
+        cleaned = re.sub(r"response_metadata=\{\s*.*?\s*\}", "", cleaned, flags=re.DOTALL)
 
-        #  Remove additional_kwargs={}
-        cleaned = re.sub(r"additional_kwargs=\{\s*.*?\s*\}", "", cleaned)
-
-        #  Remove response_metadata={
-        cleaned = re.sub(r"response_metadata=\{\s*.*", "", cleaned)
-
-        #  Replace literal '\n' with actual newlines
+        # Replace literal '\n' with actual newlines
         cleaned = cleaned.replace(r'\n', '\n')
 
         # Strip leading/trailing whitespace
@@ -182,7 +179,8 @@ def ask_question(data: QueryRequest):
 
         return {
             "question": data.question,
-            "answer": cleaned_answer
+            "answer": cleaned_answer,
+            "confidence": result["confidence"]
         }
 
     except Exception as e:

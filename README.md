@@ -16,6 +16,7 @@ pip install pypdf
 
 ```
 
+
 🚀 Run the Script
 
 To initialize memory for the LLM, run:

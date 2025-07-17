@@ -48,6 +48,24 @@ def get_language_tag(lang_code: str) -> str:
         "en": "🔤 Detected Language: English 🇬🇧"
     }.get(lang_code, "🔤 Detected Language: Unknown ❓")
 
+# === Split long messages to avoid Telegram's 4096-character limit ===
+async def send_long_message(update: Update, text: str, max_length=4096):
+    if len(text) <= max_length:
+        await update.message.reply_text(text)
+        return
+    parts = []
+    current_part = ""
+    for line in text.split("\n"):
+        if len(current_part) + len(line) + 1 <= max_length:
+            current_part += line + "\n"
+        else:
+            parts.append(current_part.strip())
+            current_part = line + "\n"
+    if current_part:
+        parts.append(current_part.strip())
+    for part in parts:
+        await update.message.reply_text(part)
+
 # === /start Command ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Hello! Send your legal question as text, voice, or image.")
@@ -57,8 +75,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question = update.message.text
     try:
         res = requests.post(API_URL, json={"question": question})
-        answer = res.json().get("answer", "❌ Sorry, couldn't find an answer.")
-        await update.message.reply_text(f"📜 Answer:\n{answer}")
+        res.raise_for_status()  # Raise an exception for bad status codes
+        response_data = res.json()
+        print(f"API Response: {response_data}")  # Debug: Check API response
+        answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
+        confidence = response_data.get("confidence", 0.0)
+        await send_long_message(update, f"📜 Answer:\n{answer}\n\n⭐ Confidence: {confidence}/10")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
@@ -105,8 +127,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         res = requests.post(API_URL, json={"question": final_text})
-        answer = res.json().get("answer", "❌ Sorry, couldn't find an answer.")
-        await update.message.reply_text(f"📜 Answer:\n{answer}")
+        res.raise_for_status()  # Raise an exception for bad status codes
+        response_data = res.json()
+        print(f"API Response: {response_data}")  # Debug: Check API response
+        answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
+        confidence = response_data.get("confidence", 0.0)
+        await send_long_message(update, f"📜 Answer:\n{answer}\n\n⭐ Confidence: {confidence}/10")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
@@ -127,15 +153,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Inform user what is being processed
-        await update.message.reply_text(f"🖼 Processing image and asking AI:\n{detailed_prompt}")
+        await send_long_message(update, f"🖼 Processing image and asking AI:\n{detailed_prompt}")
 
         # Send prompt to FastAPI LLM
         res = requests.post(API_URL, json={"question": detailed_prompt})
-        answer = res.json().get("answer", "❌ Sorry, couldn't find an answer.")
-
-        # Send answer to user
-        await update.message.reply_text(f"📜 AI Answer:\n{answer}")
-
+        res.raise_for_status()  # Raise an exception for bad status codes
+        response_data = res.json()
+        print(f"API Response: {response_data}")  # Debug: Check API response
+        answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
+        confidence = response_data.get("confidence", 0.0)
+        await send_long_message(update, f"📜 AI Answer:\n{answer}\n\n⭐ Confidence: {confidence}/10")
     except Exception as e:
         await update.message.reply_text(f"❌ Error processing image: {str(e)}")
 
