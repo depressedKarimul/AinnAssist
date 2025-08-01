@@ -75,12 +75,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question = update.message.text
     try:
         res = requests.post(API_URL, json={"question": question})
-        res.raise_for_status()  # Raise an exception for bad status codes
+        res.raise_for_status()
         response_data = res.json()
-        print(f"API Response: {response_data}")  # Debug: Check API response
+        print(f"API Response: {response_data}")
         answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
-        confidence = response_data.get("confidence", 0.0)
-        await send_long_message(update, f"📜 Answer:\n{answer}\n\n⭐ Confidence: {confidence}/10")
+        confidence = response_data.get("confidence", 5.0)
+        await send_long_message(update, f"📜 Answer:\n{answer}\n\n⭐ Confidence: {confidence}/5")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
@@ -127,42 +127,35 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         res = requests.post(API_URL, json={"question": final_text})
-        res.raise_for_status()  # Raise an exception for bad status codes
+        res.raise_for_status()
         response_data = res.json()
-        print(f"API Response: {response_data}")  # Debug: Check API response
+        print(f"API Response: {response_data}")
         answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
-        confidence = response_data.get("confidence", 0.0)
-        await send_long_message(update, f"📜 Answer:\n{answer}\n\n⭐ Confidence: {confidence}/10")
+        confidence = response_data.get("confidence", 5.0)
+        await send_long_message(update, f"📜 Answer:\n{answer}\n\n⭐ Confidence: {confidence}/5")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 # === Handle Photo/Image Message ===
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-1]  # highest resolution
+    photo = update.message.photo[-1]
     image_path = "photo.jpg"
     await (await photo.get_file()).download_to_drive(image_path)
 
     try:
-        # Generate basic caption
         caption = generate_image_caption(image_path)
-
-        # Create detailed prompt with legal question
         detailed_prompt = (
             f"Describe in detail what is happening in the following image:\n{caption}\n\n"
             "Now, Based on this description, which law in Bangladesh is potentially being violated, and what type of punishment could apply under that law, including how many years of imprisonment or how much fine may be imposed?"
         )
-
-        # Inform user what is being processed
         await send_long_message(update, f"🖼 Processing image and asking AI:\n{detailed_prompt}")
-
-        # Send prompt to FastAPI LLM
         res = requests.post(API_URL, json={"question": detailed_prompt})
-        res.raise_for_status()  # Raise an exception for bad status codes
+        res.raise_for_status()
         response_data = res.json()
-        print(f"API Response: {response_data}")  # Debug: Check API response
+        print(f"API Response: {response_data}")
         answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
-        confidence = response_data.get("confidence", 0.0)
-        await send_long_message(update, f"📜 AI Answer:\n{answer}\n\n⭐ Confidence: {confidence}/10")
+        confidence = response_data.get("confidence", 5.0)
+        await send_long_message(update, f"📜 AI Answer:\n{answer}\n\n⭐ Confidence: {confidence}/5")
     except Exception as e:
         await update.message.reply_text(f"❌ Error processing image: {str(e)}")
 

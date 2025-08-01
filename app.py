@@ -135,9 +135,6 @@
 #         except Exception as e:
 #             st.error("❌ Something went wrong while generating the answer.")
 
-
-
-
 import re
 from fastapi import FastAPI, Response
 from pydantic import BaseModel
@@ -151,37 +148,27 @@ class QueryRequest(BaseModel):
 
 # === Root Check Endpoint ===
 @app.get("/")
-def root():
+async def root():
     return Response(status_code=204)
 
 # === Legal Question Answering Endpoint ===
 @app.post("/ask")
-def ask_question(data: QueryRequest):
+async def ask_question(data: QueryRequest):
     try:
-        result = answer_query(data.question)
+        result = await answer_query(data.question)
         answer = str(result["answer"])
 
-        # === Clean the LLM response ===
-        # Remove <think>...</think> tags
+        # Clean the LLM response
         cleaned = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL)
-
-        # Remove additional_kwargs={}
         cleaned = re.sub(r"additional_kwargs=\{\s*.*?\s*\}", "", cleaned, flags=re.DOTALL)
-
-        # Remove response_metadata={...}
         cleaned = re.sub(r"response_metadata=\{\s*.*?\s*\}", "", cleaned, flags=re.DOTALL)
-
-        # Replace literal '\n' with actual newlines
-        cleaned = cleaned.replace(r'\n', '\n')
-
-        # Strip leading/trailing whitespace
-        cleaned_answer = cleaned.strip()
+        cleaned = cleaned.replace(r'\n', '\n').strip()
 
         return {
             "question": data.question,
-            "answer": cleaned_answer,
-            "confidence": result["confidence"]
+            "answer": cleaned,
+            "confidence": result["confidence"],
+            "sources": [line.split("Source: ")[1] for line in cleaned.split("\n\n") if "Source: " in line]
         }
-
     except Exception as e:
         return {"error": str(e)}
