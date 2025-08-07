@@ -5,7 +5,8 @@ from pydub import AudioSegment
 from PIL import Image
 import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
-from telegram import Update
+from gtts import gTTS
+from telegram import Update 
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -14,6 +15,8 @@ from telegram.ext import (
     filters
 )
 from dotenv import load_dotenv
+from deep_translator import GoogleTranslator
+from langdetect import detect
 
 # === Load environment variables ===
 load_dotenv()
@@ -41,7 +44,7 @@ def generate_image_caption(image_path):
     caption = processor.decode(out[0], skip_special_tokens=True)
     return caption.strip()
 
-# === Language Tag (for voice only) ===
+# === Language Tag ===
 def get_language_tag(lang_code: str) -> str:
     return {
         "bn": "🔤 Detected Language: Bangla 🇧🇩",
@@ -74,12 +77,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question = update.message.text
     try:
-        res = requests.post(API_URL, json={"question": question})
+        # Detect language
+        lang = detect(question)
+        question_to_api = question
+
+        # If Bangla, translate to English
+        if lang == "bn":
+            question_to_api = GoogleTranslator(source='bn', target='en').translate(question)
+            await update.message.reply_text(f"🗣 Transcribed: {question}\n{get_language_tag(lang)}")
+
+        # Send to FastAPI
+        res = requests.post(API_URL, json={"question": question_to_api})
         res.raise_for_status()
         response_data = res.json()
-        print(f"API Response: {response_data}")
         answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
         confidence = response_data.get("confidence", 5.0)
+
+        # If input was Bangla, translate answer back to Bangla
+        if lang == "bn":
+            answer = GoogleTranslator(source='en', target='bn').translate(answer)
+        
         await send_long_message(update, f"📜 Answer:\n{answer}\n\n⭐ Confidence: {confidence}/5")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
@@ -126,15 +143,38 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🗣 Transcribed: {final_text}\n{get_language_tag(lang)}")
 
     try:
-        res = requests.post(API_URL, json={"question": final_text})
+        # Translate to English if Bangla
+        question_to_api = final_text
+        if lang == "bn":
+            question_to_api = GoogleTranslator(source='bn', target='en').translate(final_text)
+
+        # Send to FastAPI
+        res = requests.post(API_URL, json={"question": question_to_api})
         res.raise_for_status()
         response_data = res.json()
-        print(f"API Response: {response_data}")
         answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
         confidence = response_data.get("confidence", 5.0)
-        await send_long_message(update, f"📜 Answer:\n{answer}\n\n⭐ Confidence: {confidence}/5")
+
+        # Translate answer to Bangla if input was Bangla
+        if lang == "bn":
+            answer = GoogleTranslator(source='en', target='bn').translate(answer)
+
+        # Convert answer to voice
+        tts = gTTS(answer, lang=lang)
+        tts.save("response.mp3")
+        sound = AudioSegment.from_mp3("response.mp3")
+        sound.export("response.ogg", format="ogg", codec="libopus")
+
+        # Send as voice
+        with open("response.ogg", "rb") as voice_file:
+            await update.message.reply_voice(voice=voice_file, caption=f"⭐ Confidence: {confidence}/5")
+
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
+    finally:
+        for f in ["voice.ogg", "voice.wav", "response.mp3", "response.ogg"]:
+            if os.path.exists(f):
+                os.remove(f)
 
 # === Handle Photo/Image Message ===
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -152,7 +192,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res = requests.post(API_URL, json={"question": detailed_prompt})
         res.raise_for_status()
         response_data = res.json()
-        print(f"API Response: {response_data}")
         answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
         confidence = response_data.get("confidence", 5.0)
         await send_long_message(update, f"📜 AI Answer:\n{answer}\n\n⭐ Confidence: {confidence}/5")

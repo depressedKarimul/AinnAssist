@@ -80,7 +80,6 @@ def keyword_boost(query, doc_content):
 def retrieve_relevant_docs(query, k=10, relevance_threshold=0.2):
     global conversation_context
 
-    # Add previous context for follow-up style prompts
     followup_clues = ["explain", "that", "more", "detail", "what", "about"]
     if any(clue in query.lower() for clue in followup_clues):
         query = (conversation_context["last_question"] or "") + " " + query
@@ -105,7 +104,7 @@ def retrieve_relevant_docs(query, k=10, relevance_threshold=0.2):
         doc_score = 1.0 if conversation_context["pdf"] and conversation_context["pdf"].lower() in file_name else 0.6
         similarity_score = max(0.0, min(1.0, 1 - score))
         if score > 1.2:
-            similarity_score = 0.4  # prevent too low score
+            similarity_score = 0.4
         article_score = 1.0 if doc.metadata.get("article", "None") != "None" else 0.5
         combined_score = 0.4 * similarity_score + 0.2 * keyword_score + 0.3 * doc_score + 0.1 * article_score
         reranked_docs.append((doc, score, combined_score))
@@ -126,31 +125,21 @@ def calculate_confidence_score(doc, score):
     normalized_score = max(0.0, min(1.0, 1 - score))
     keyword_score = keyword_boost(conversation_context["last_question"], doc.page_content)
 
-    # Floor boost to avoid very low scores
     if normalized_score < 0.4:
         normalized_score = 0.4
     if keyword_score < 0.2:
         keyword_score = 0.2
 
     combined = 0.8 * normalized_score + 0.2 * keyword_score
-    return round(min(combined * 5 + 0.5, 5.0), 2)  # Boost and cap
+    return round(min(combined * 5 + 0.5, 5.0), 2)
 
-def get_confidence_label(score):
-    if score >= 4.5:
-        return "🔵 High"
-    elif score >= 3.5:
-        return "🟢 Medium"
-    else:
-        return "🟠 Low"
-
-# === Format source ===
 def format_source_citation(doc):
     meta = doc.metadata
     source = os.path.basename(meta.get("source", "Unknown"))
     page = meta.get("page", "?")
     return f"📄 {source}, Page {page}"
 
-# === Prompt Template (Chat Style with Follow-up) ===
+# === Prompt Template ===
 custom_prompt_template = """
 You are a legal assistant specializing in Bangladesh law.
 
@@ -213,7 +202,7 @@ async def process_question(q, prompt_template):
         "source": source
     }
 
-# === Entry point for answer generation ===
+# === Entry point ===
 async def answer_query(query):
     global conversation_context
     update_context(query)
@@ -232,15 +221,18 @@ async def answer_query(query):
     answers = []
     total_confidence = 0.0
     for res in results:
-        label = get_confidence_label(res["confidence"])
-        answers.append(f"📜 Q: {res['question']}\nA: {res['answer']}\nSource: {res['source']}\nConfidence: {res['confidence']}/5 {label}")
+        answers.append(
+            f"📜 Question: {res['question']}\n"
+            f"Answer: {res['answer']}\n"
+            f"Source: {res['source']}\n"
+            f"⭐️ Confidence: {res['confidence']}/5"
+        )
         total_confidence += res["confidence"]
 
     avg_confidence = total_confidence / len(questions)
     final_answer = "\n\n".join(answers)
-
-    # Update last answer for follow-ups
     conversation_context["last_answer"] = final_answer
+
     return {
         "answer": final_answer,
         "confidence": float(round(avg_confidence, 2))
