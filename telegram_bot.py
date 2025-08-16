@@ -1,4 +1,3 @@
-
 import os
 import requests
 import speech_recognition as sr
@@ -92,13 +91,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res.raise_for_status()
         response_data = res.json()
         answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
-        confidence = response_data.get("confidence", 5.0)
 
         # If input was Bangla, translate answer back to Bangla
         if lang == "bn":
             answer = GoogleTranslator(source='en', target='bn').translate(answer)
         
-        await send_long_message(update, f"📜 Answer:\n{answer}\n\n⭐ Confidence: {confidence}/5")
+        await send_long_message(update, f"📜 Answer:\n{answer}")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
@@ -154,7 +152,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res.raise_for_status()
         response_data = res.json()
         answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
-        confidence = response_data.get("confidence", 5.0)
 
         # Translate answer to Bangla if input was Bangla
         if lang == "bn":
@@ -168,7 +165,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Send as voice
         with open("response.ogg", "rb") as voice_file:
-            await update.message.reply_voice(voice=voice_file, caption=f"⭐ Confidence: {confidence}/5")
+            await update.message.reply_voice(voice=voice_file)
 
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
@@ -194,8 +191,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res.raise_for_status()
         response_data = res.json()
         answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
-        confidence = response_data.get("confidence", 5.0)
-        await send_long_message(update, f"📜 AI Answer:\n{answer}\n\n⭐ Confidence: {confidence}/5")
+        await send_long_message(update, f"📜 AI Answer:\n{answer}")
     except Exception as e:
         await update.message.reply_text(f"❌ Error processing image: {str(e)}")
 
@@ -211,8 +207,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-	
-	
-
-
-

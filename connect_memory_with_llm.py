@@ -1,4 +1,3 @@
-
 import os
 import re
 import asyncio
@@ -7,6 +6,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
+from sentence_transformers import CrossEncoder
 
 # === Load environment variables ===
 load_dotenv()
@@ -31,6 +31,14 @@ def load_vector_store():
         exit(1)
 
 faiss_db = load_vector_store()
+
+# === Load Cross-Encoder for better relevance scoring ===
+try:
+    cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+    print("[INFO] ✅ Cross-Encoder loaded for improved confidence scoring.")
+except Exception as e:
+    print(f"[ERROR] ❌ Failed to load Cross-Encoder: {e}. Falling back to original scoring.")
+    cross_encoder = None
 
 # === Load LLM from Groq ===
 def load_llm():
@@ -64,7 +72,6 @@ def update_context(query, pdf="data/The Constitution of the People's Republic of
         conversation_context["topic"] = "Unknown"
         conversation_context["pdf"] = None
     conversation_context["last_question"] = query
-    print(f"[DEBUG] Current context: {conversation_context}")
     return conversation_context
 
 # === Keyword Scoring ===
@@ -77,8 +84,8 @@ def keyword_boost(query, doc_content):
     score = min(matches / len(query_keywords), 1.0) if query_keywords else 0.0
     return score
 
-# === Retrieve relevant documents ===
-def retrieve_relevant_docs(query, k=10, relevance_threshold=0.2):
+# === Retrieve relevant documents (filter weak docs) ===
+def retrieve_relevant_docs(query, k=10, relevance_threshold=0.3):
     global conversation_context
 
     followup_clues = ["explain", "that", "more", "detail", "what", "about"]
@@ -103,9 +110,9 @@ def retrieve_relevant_docs(query, k=10, relevance_threshold=0.2):
         keyword_score = keyword_boost(query, doc.page_content)
         file_name = os.path.basename(doc.metadata.get("source", "")).lower()
         doc_score = 1.0 if conversation_context["pdf"] and conversation_context["pdf"].lower() in file_name else 0.6
-        similarity_score = max(0.0, min(1.0, 1 - score))
-        if score > 1.2:
-            similarity_score = 0.4
+        similarity_score = max(0.0, min(1.0, 1 - (score ** 2) / 2))
+        if score > 1.414:
+            similarity_score = 0.0
         article_score = 1.0 if doc.metadata.get("article", "None") != "None" else 0.5
         combined_score = 0.4 * similarity_score + 0.2 * keyword_score + 0.3 * doc_score + 0.1 * article_score
         reranked_docs.append((doc, score, combined_score))
@@ -113,32 +120,94 @@ def retrieve_relevant_docs(query, k=10, relevance_threshold=0.2):
     reranked_docs.sort(key=lambda x: x[2], reverse=True)
     filtered_docs = [(doc, score) for doc, score, combined in reranked_docs if combined >= relevance_threshold]
 
-    print(f"[DEBUG] Query: {query}")
-    print(f"[DEBUG] Retrieved {len(docs_and_scores)} docs, filtered to {len(filtered_docs)}")
-    for i, (doc, score, combined) in enumerate(reranked_docs[:1]):
-        print(f"[DEBUG] Top Doc: {doc.metadata.get('source', '?')} | Page {doc.metadata.get('page', '?')} | Combined: {combined:.2f}")
-        print(f"[DEBUG] Content: {doc.page_content[:100]}...")
-
     return filtered_docs[:1] if filtered_docs else [(docs_and_scores[0][0], docs_and_scores[0][1])]
 
-# === Confidence score ===
-def calculate_confidence_score(doc, score):
-    normalized_score = max(0.0, min(1.0, 1 - score))
-    keyword_score = keyword_boost(conversation_context["last_question"], doc.page_content)
+# === Confidence score (improved with Cross-Encoder for better relevance) ===
+def calculate_confidence_score(doc, score, query):
+    # Use Cross-Encoder for more accurate relevance score if available
+    if cross_encoder:
+        cross_input = [[query, doc.page_content]]
+        cross_score = cross_encoder.predict(cross_input)[0]  # Score between -inf and +inf, but typically sigmoid-applied in models for 0-1
+        # Normalize cross_score (assuming logistic output, but for ms-marco it's raw logit; map to 0-1)
+        normalized_cross_score = 1 / (1 + pow(2.718, -cross_score))  # Sigmoid to 0-1
+        relevance_score = normalized_cross_score
+        similarity_weight = 0.5  # Higher weight for cross-encoder
+    else:
+        # Fallback to original FAISS-based
+        relevance_score = max(0.0, min(1.0, 1 - (score ** 2) / 2))
+        similarity_weight = 0.5
 
-    if normalized_score < 0.4:
-        normalized_score = 0.4
-    if keyword_score < 0.2:
-        keyword_score = 0.2
+    # 2. Context alignment score
+    context_score = 0.5
+    if conversation_context["pdf"] and conversation_context["pdf"].lower() in os.path.basename(doc.metadata.get("source", "")).lower():
+        context_score = 1.0
+    elif conversation_context["topic"] in ["Constitution of Bangladesh", "Penal Code"]:
+        context_score = 0.8
+    context_weight = 0.3
 
-    combined = 0.8 * normalized_score + 0.2 * keyword_score
-    return round(min(combined * 5 + 0.5, 5.0), 2)
+    # 3. Query specificity score
+    query_words = re.findall(r'\w+', query.lower())
+    legal_keywords = {"socialist", "economic", "system", "capital", "dhaka", "bangabandhu", "constitution", "penal", "code", "criminal", "article"}
+    specific_terms = len([w for w in query_words if w in legal_keywords])
+    query_specificity = min(specific_terms / max(len(query_words), 1), 1.0)
+    query_specificity = 0.5 + 0.5 * query_specificity
+    specificity_weight = 0.1
 
-def format_source_citation(doc):
+    # 4. Metadata relevance score
+    metadata_score = 0.7
+    article = doc.metadata.get("article", "None")
+    if article != "None":
+        metadata_score = 1.0
+    if conversation_context["last_question"]:
+        question = conversation_context["last_question"].lower()
+        if re.search(r'article\s*\d+', question) and article != "None":
+            metadata_score = 1.1
+    metadata_weight = 0.1
+
+    # Combine scores with weights
+    combined_score = (
+        similarity_weight * relevance_score +
+        context_weight * context_score +
+        specificity_weight * query_specificity +
+        metadata_weight * metadata_score
+    )
+
+    # Add baseline boost to favor 4–5 range for relevant results
+    boosted_score = combined_score + 0.15
+    confidence = round(boosted_score * 5, 2)
+    confidence = min(max(confidence, 3.5), 5.0)  # Clamp to ensure high scores for good matches
+
+    return confidence
+
+# === Source citation (Section > Article > Page) ===
+def format_source_citation(doc, question=None):
     meta = doc.metadata
     source = os.path.basename(meta.get("source", "Unknown"))
     page = meta.get("page", "?")
-    return f"📄 {source}, Page {page}"
+    
+    section_in_question = None
+    if question:
+        match = re.search(r'section\s*(\d+)', question, re.IGNORECASE)
+        if match:
+            section_in_question = match.group(1)
+
+    article = meta.get("article") if meta.get("article") != "None" else None
+
+    if isinstance(page, int):
+        page = page + 1
+    elif isinstance(page, str) and page.isdigit():
+        page = str(int(page) + 1)
+    else:
+        page = "?"
+
+    citation_parts = [f"📄 {source}"]
+    if section_in_question:
+        citation_parts.append(f"Section {section_in_question}")
+    elif article:
+        citation_parts.append(f"Article {article}")
+    citation_parts.append(f"Page {page}")
+
+    return ", ".join(citation_parts)
 
 # === Prompt Template ===
 custom_prompt_template = """
@@ -164,7 +233,6 @@ Answer:
 # === Answer generation ===
 async def process_question(q, prompt_template):
     docs_and_scores = retrieve_relevant_docs(q)
-
     if not docs_and_scores:
         return {
             "question": q,
@@ -193,8 +261,8 @@ async def process_question(q, prompt_template):
             "source": "None"
         }
 
-    confidence = calculate_confidence_score(doc, score)
-    source = format_source_citation(doc)
+    confidence = calculate_confidence_score(doc, score, q)
+    source = format_source_citation(doc, question=q)
 
     return {
         "question": q,
@@ -207,14 +275,10 @@ async def process_question(q, prompt_template):
 async def answer_query(query):
     global conversation_context
     update_context(query)
-
     questions = [q.strip() for q in query.split("?") if q.strip()]
     if not questions:
         conversation_context["last_answer"] = "❌ No valid questions provided."
-        return {
-            "answer": conversation_context["last_answer"],
-            "confidence": 5.0
-        }
+        return {"answer": conversation_context["last_answer"], "confidence": 5.0}
 
     tasks = [process_question(q + "?" if not q.endswith("?") else q, custom_prompt_template) for q in questions]
     results = await asyncio.gather(*tasks)
@@ -234,10 +298,7 @@ async def answer_query(query):
     final_answer = "\n\n".join(answers)
     conversation_context["last_answer"] = final_answer
 
-    return {
-        "answer": final_answer,
-        "confidence": float(round(avg_confidence, 2))
-    }
+    return {"answer": final_answer, "confidence": float(round(avg_confidence, 2))}
 
 # === CLI Mode ===
 if __name__ == "__main__":
@@ -249,4 +310,3 @@ if __name__ == "__main__":
             print("\n🤖 AinnAssist is thinking...\n")
             result = asyncio.run(answer_query(question))
             print(f"\nAnswer:\n{result['answer']}")
-			
