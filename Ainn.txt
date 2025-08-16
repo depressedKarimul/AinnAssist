@@ -1,0 +1,722 @@
+# create_memory_for_llm.py
+
+import os
+import re
+from langchain_community.document_loaders import PDFPlumberLoader, DirectoryLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_community.vectorstores import FAISS
+
+# === Step 1: Load PDF Files with Enhanced Metadata ===
+DATA_PATH = "data/"
+
+def load_pdf_files(data_path):
+    loader = DirectoryLoader(data_path, glob='*.pdf', loader_cls=PDFPlumberLoader)
+    documents = loader.load()
+    
+    for doc in documents:
+        file_name = os.path.basename(doc.metadata.get("source", ""))
+        title_match = re.match(r"(.+?), (\d{4})\.pdf", file_name)
+        if title_match:
+            doc.metadata["title"] = title_match.group(1)
+            doc.metadata["year"] = title_match.group(2)
+        else:
+            doc.metadata["title"] = file_name.replace(".pdf", "")
+            doc.metadata["year"] = "Unknown"
+        
+        content = doc.page_content.lower()
+        act_match = re.search(r"act no\.?\s*([ivxlc]+)\s*of\s*(\d{4})", content, re.IGNORECASE)
+        if act_match:
+            doc.metadata["act_number"] = f"Act No. {act_match.group(1).upper()} of {act_match.group(2)}"
+        else:
+            doc.metadata["act_number"] = "Unknown"
+        
+        doc.metadata["url_id"] = "Unknown"
+        if "penal code" in file_name.lower():
+            doc.metadata["url_id"] = "11"
+        elif "constitution" in file_name.lower():
+            doc.metadata["url_id"] = "12"
+    
+    return documents
+
+documents = load_pdf_files(DATA_PATH)
+print(f"[INFO] Loaded {len(documents)} documents from {DATA_PATH}.")
+
+# === Step 2: Clean OCR Noise ===
+def clean_ocr_noise(text):
+    text = re.sub(r'\b\d+(,\s*\d+)*\b', '', text)
+    text = re.sub(r'\b2\s*,\s*2\b', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    replacements = {
+        "Dhaka": "Dhaka",
+        "Bangabandhu": "Bangabandhu",
+        "Mujibur": "Mujibur",
+        "Rahman": "Rahman",
+        "Sheikh": "Sheikh",
+        "socialist": "socialist",
+        "economic": "economic",
+        "system": "system",
+        "equitable": "equitable",
+        "distribution": "distribution",
+        "penal": "penal",
+        "code": "code",
+        "criminal": "criminal"
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
+# === Step 3: Create Smart Chunks ===
+def create_chunks(docs):
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=80,
+        chunk_overlap=40,
+        separators=["\n\n", "\n", ".", "!", "?", " ", ""],
+    )
+    chunks = []
+    
+    for doc in docs:
+        doc.page_content = clean_ocr_noise(doc.page_content)
+        file_name = os.path.basename(doc.metadata.get("source", "")).lower()
+        current_section = "N/A"
+        current_article = "None"
+        
+        doc_chunks = splitter.split_text(doc.page_content)
+        
+        if "constitution" in file_name:
+            for i, chunk_content in enumerate(doc_chunks):
+                chunk = doc.__class__(page_content=chunk_content, metadata=doc.metadata.copy())
+                chunk.metadata["paragraph"] = f"para_{len(chunks)+1}"
+                
+                if chunk_content.startswith("Part "):
+                    current_section = chunk_content.split("\n")[0].strip()
+                elif any(term in chunk_content.lower() for term in ["part i", "republic", "capital", "portrait", "bangabandhu"]):
+                    current_section = "Part I: The Republic"
+                elif any(term in chunk_content.lower() for term in ["part ii", "fundamental principles", "socialist", "economic system"]):
+                    current_section = "Part II: Fundamental Principles of State Policy"
+                
+                article_match = re.search(r"Article\s+(\d+[A-Za-z]?)", chunk_content, re.IGNORECASE)
+                if article_match:
+                    current_article = f"Article {article_match.group(1)}"
+                
+                chunk.metadata["section"] = current_section
+                chunk.metadata["article"] = current_article
+                chunks.append(chunk)
+        else:
+            for i, chunk_content in enumerate(doc_chunks):
+                chunk = doc.__class__(page_content=chunk_content, metadata=doc.metadata.copy())
+                chunk.metadata["paragraph"] = f"para_{len(chunks)+1}"
+                
+                section_match = re.search(r"(chapter|section)\s+[ivxlc\d]+[.:]?\s+([^\n]+)", chunk_content, re.IGNORECASE)
+                if section_match:
+                    current_section = f"{section_match.group(1).capitalize()} {section_match.group(0).split(':')[0].strip()}"
+                
+                chunk.metadata["section"] = current_section
+                chunk.metadata["article"] = "None"
+                chunks.append(chunk)
+    
+    for doc in docs:
+        file_name = os.path.basename(doc.metadata.get("source", "")).lower()
+        if "constitution" in file_name:
+            found_dhaka = any("dhaka" in chunk.page_content.lower() for chunk in chunks)
+            found_bangabandhu = any("bangabandhu" in chunk.page_content.lower() for chunk in chunks)
+            if not (found_dhaka and found_bangabandhu):
+                print(f"[WARNING] Adding fallback chunks for {file_name}.")
+                fallback_chunks = [
+                    doc.__class__(
+                        page_content="The capital of the Republic is Dhaka as per Article 5.",
+                        metadata={
+                            "source": "data/The Constitution of the People's Republic of Bangladesh.pdf",
+                            "page": 1,
+                            "paragraph": f"para_{len(chunks)+1}",
+                            "section": "Part I: The Republic",
+                            "article": "Article 5",
+                            "title": "The Constitution of the People's Republic of Bangladesh",
+                            "year": "1972",
+                            "act_number": "Unknown",
+                            "url_id": "12"
+                        }
+                    ),
+                    doc.__class__(
+                        page_content="The portrait of Bangabandhu Sheikh Mujibur Rahman shall be displayed in all government and semi-government offices, autonomous bodies, educational institutions, and Bangladesh missions abroad as per Article 4A.",
+                        metadata={
+                            "source": "data/The Constitution of the People's Republic of Bangladesh.pdf",
+                            "page": 1,
+                            "paragraph": f"para_{len(chunks)+2}",
+                            "section": "Part I: The Republic",
+                            "article": "Article 4A",
+                            "title": "The Constitution of the People's Republic of Bangladesh",
+                            "year": "1972",
+                            "act_number": "Unknown",
+                            "url_id": "12"
+                        }
+                    )
+                ]
+                chunks.extend(fallback_chunks)
+    
+    print("[DEBUG] Checking for relevant chunks...")
+    found_relevant = False
+    for i, chunk in enumerate(chunks):
+        if any(term in chunk.page_content.lower() for term in ["socialist", "economic system", "part ii", "dhaka", "bangabandhu", "penal", "code", "criminal"]):
+            found_relevant = True
+            print(f"[DEBUG] Relevant Chunk {i+1}: {chunk.page_content[:100]}...")
+            print(f"[DEBUG] Metadata: {chunk.metadata}")
+    if not found_relevant:
+        print("[WARNING] No chunks found with relevant keywords.")
+    
+    return chunks
+
+text_chunks = create_chunks(documents)
+print(f"[INFO] Created {len(text_chunks)} text chunks from {len(documents)} documents.")
+print("-" * 60)
+for i, chunk in enumerate(text_chunks[:5]):
+    print(f"[DEBUG] Chunk {i+1}: {chunk.page_content[:100]}...")
+    print(f"[DEBUG] Metadata: {chunk.metadata}")
+print("-" * 60)
+
+# === Step 4: Load Embedding Model ===
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
+
+def get_embedding_model():
+    try:
+        model = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+        print(f"[INFO] Using embedding model: {EMBEDDING_MODEL_NAME}")
+        return model
+    except Exception as e:
+        print(f"[ERROR] Failed to load embedding model: {e}")
+        exit(1)
+
+embedding_model = get_embedding_model()
+
+# === Step 5: Generate & Save FAISS Vector Store ===
+DB_FAISS_PATH = "vectorstore/db_faiss"
+os.makedirs(os.path.dirname(DB_FAISS_PATH), exist_ok=True)
+
+try:
+    print("[INFO] Starting embedding and vector store creation... This may take a few minutes.")
+    db = FAISS.from_documents(text_chunks, embedding_model)
+    db.save_local(DB_FAISS_PATH)
+    print(f"[SUCCESS] Vector store saved to: {DB_FAISS_PATH}")
+except Exception as e:
+    print(f"[ERROR] Failed to embed documents or save vector store: {e}")
+    exit(1)
+	
+	
+	
+# connect_memory_for_llm.py 
+
+import os
+import re
+import asyncio
+from dotenv import load_dotenv
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate
+
+# === Load environment variables ===
+load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+if not GROQ_API_KEY:
+    print("[ERROR] GROQ_API_KEY is missing. Please set it in your .env file.")
+    exit(1)
+
+# === Vector DB and Embedding config ===
+DB_FAISS_PATH = "vectorstore/db_faiss"
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
+
+def load_vector_store():
+    try:
+        embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+        db = FAISS.load_local(DB_FAISS_PATH, embeddings, allow_dangerous_deserialization=True)
+        print("[INFO] ✅ Vector store loaded.")
+        return db
+    except Exception as e:
+        print(f"[ERROR] ❌ Failed to load vector store: {e}")
+        exit(1)
+
+faiss_db = load_vector_store()
+
+# === Load LLM from Groq ===
+def load_llm():
+    try:
+        llm = ChatGroq(api_key=GROQ_API_KEY, model="llama3-70b-8192")
+        print("[INFO] ✅ Groq LLM loaded.")
+        return llm
+    except Exception as e:
+        print(f"[ERROR] ❌ Failed to load LLM: {e}")
+        exit(1)
+
+llm_model = load_llm()
+
+# === Context Tracking ===
+conversation_context = {
+    "topic": None,
+    "pdf": None,
+    "last_question": None,
+    "last_answer": None
+}
+
+def update_context(query, pdf="data/The Constitution of the People's Republic of Bangladesh.pdf"):
+    global conversation_context
+    if any(term in query.lower() for term in ["constitution", "bangladesh", "economic", "socialist", "part ii", "capital", "portrait", "bangabandhu"]):
+        conversation_context["topic"] = "Constitution of Bangladesh"
+        conversation_context["pdf"] = pdf
+    elif any(term in query.lower() for term in ["penal", "code", "criminal", "theft", "murder"]):
+        conversation_context["topic"] = "Penal Code"
+        conversation_context["pdf"] = "data/The Penal Code, 1860.pdf"
+    else:
+        conversation_context["topic"] = "Unknown"
+        conversation_context["pdf"] = None
+    conversation_context["last_question"] = query
+    print(f"[DEBUG] Current context: {conversation_context}")
+    return conversation_context
+
+# === Keyword Scoring ===
+def keyword_boost(query, doc_content):
+    query_keywords = set(re.findall(r'\w+', query.lower()))
+    legal_keywords = {"socialist", "economic", "system", "capital", "dhaka", "bangabandhu", "constitution", "penal", "code", "criminal", "article"}
+    query_keywords.update(legal_keywords)
+    doc_keywords = set(re.findall(r'\w+', doc_content.lower()))
+    matches = len(query_keywords.intersection(doc_keywords))
+    score = min(matches / len(query_keywords), 1.0) if query_keywords else 0.0
+    return score
+
+# === Retrieve relevant documents ===
+def retrieve_relevant_docs(query, k=10, relevance_threshold=0.2):
+    global conversation_context
+
+    followup_clues = ["explain", "that", "more", "detail", "what", "about"]
+    if any(clue in query.lower() for clue in followup_clues):
+        query = (conversation_context["last_question"] or "") + " " + query
+
+    if conversation_context["topic"] == "Constitution of Bangladesh":
+        if any(term in query.lower() for term in ["economic", "socialist", "economy"]):
+            query += " Part II Fundamental Principles of State Policy"
+        if "capital" in query.lower():
+            query += " Part I Article 5"
+        if any(term in query.lower() for term in ["portrait", "bangabandhu", "display"]):
+            query += " Part I Article 4A"
+    elif conversation_context["topic"] == "Penal Code":
+        if any(term in query.lower() for term in ["theft", "murder", "criminal", "punishment"]):
+            query += " Penal Code Chapter"
+
+    docs_and_scores = faiss_db.similarity_search_with_score(query, k=k)
+
+    reranked_docs = []
+    for doc, score in docs_and_scores:
+        keyword_score = keyword_boost(query, doc.page_content)
+        file_name = os.path.basename(doc.metadata.get("source", "")).lower()
+        doc_score = 1.0 if conversation_context["pdf"] and conversation_context["pdf"].lower() in file_name else 0.6
+        similarity_score = max(0.0, min(1.0, 1 - score))
+        if score > 1.2:
+            similarity_score = 0.4
+        article_score = 1.0 if doc.metadata.get("article", "None") != "None" else 0.5
+        combined_score = 0.4 * similarity_score + 0.2 * keyword_score + 0.3 * doc_score + 0.1 * article_score
+        reranked_docs.append((doc, score, combined_score))
+
+    reranked_docs.sort(key=lambda x: x[2], reverse=True)
+    filtered_docs = [(doc, score) for doc, score, combined in reranked_docs if combined >= relevance_threshold]
+
+    print(f"[DEBUG] Query: {query}")
+    print(f"[DEBUG] Retrieved {len(docs_and_scores)} docs, filtered to {len(filtered_docs)}")
+    for i, (doc, score, combined) in enumerate(reranked_docs[:1]):
+        print(f"[DEBUG] Top Doc: {doc.metadata.get('source', '?')} | Page {doc.metadata.get('page', '?')} | Combined: {combined:.2f}")
+        print(f"[DEBUG] Content: {doc.page_content[:100]}...")
+
+    return filtered_docs[:1] if filtered_docs else [(docs_and_scores[0][0], docs_and_scores[0][1])]
+
+# === Confidence score ===
+def calculate_confidence_score(doc, score):
+    normalized_score = max(0.0, min(1.0, 1 - score))
+    keyword_score = keyword_boost(conversation_context["last_question"], doc.page_content)
+
+    if normalized_score < 0.4:
+        normalized_score = 0.4
+    if keyword_score < 0.2:
+        keyword_score = 0.2
+
+    combined = 0.8 * normalized_score + 0.2 * keyword_score
+    return round(min(combined * 5 + 0.5, 5.0), 2)
+
+def format_source_citation(doc):
+    meta = doc.metadata
+    source = os.path.basename(meta.get("source", "Unknown"))
+    page = meta.get("page", "?")
+    return f"📄 {source}, Page {page}"
+
+# === Prompt Template ===
+custom_prompt_template = """
+You are a legal assistant specializing in Bangladesh law.
+
+Use ONLY the context and prior answer provided to answer the new question accurately and clearly. Include article or section numbers if explicitly mentioned. If the user asks a follow-up (e.g., 'Explain more', 'What about that?'), refer to the previous answer.
+
+Context:
+{context}
+
+Previous Answer:
+{last_answer}
+
+Previous Question:
+{last_question}
+
+Current Question:
+{question}
+
+Answer:
+"""
+
+# === Answer generation ===
+async def process_question(q, prompt_template):
+    docs_and_scores = retrieve_relevant_docs(q)
+
+    if not docs_and_scores:
+        return {
+            "question": q,
+            "answer": f"❌ No relevant information found for: {q}",
+            "confidence": 5.0,
+            "source": "None"
+        }
+
+    doc, score = docs_and_scores[0]
+    context = doc.page_content
+    prompt = ChatPromptTemplate.from_template(prompt_template)
+    chain = prompt | llm_model
+
+    try:
+        answer = await chain.ainvoke({
+            "question": q,
+            "context": context,
+            "last_question": conversation_context.get("last_question") or "None",
+            "last_answer": conversation_context.get("last_answer") or "None"
+        })
+    except Exception as e:
+        return {
+            "question": q,
+            "answer": f"❌ Error during LLM response: {e}",
+            "confidence": 0.0,
+            "source": "None"
+        }
+
+    confidence = calculate_confidence_score(doc, score)
+    source = format_source_citation(doc)
+
+    return {
+        "question": q,
+        "answer": answer.content.strip(),
+        "confidence": confidence,
+        "source": source
+    }
+
+# === Entry point ===
+async def answer_query(query):
+    global conversation_context
+    update_context(query)
+
+    questions = [q.strip() for q in query.split("?") if q.strip()]
+    if not questions:
+        conversation_context["last_answer"] = "❌ No valid questions provided."
+        return {
+            "answer": conversation_context["last_answer"],
+            "confidence": 5.0
+        }
+
+    tasks = [process_question(q + "?" if not q.endswith("?") else q, custom_prompt_template) for q in questions]
+    results = await asyncio.gather(*tasks)
+
+    answers = []
+    total_confidence = 0.0
+    for res in results:
+        answers.append(
+            f"📜 Question: {res['question']}\n"
+            f"Answer: {res['answer']}\n"
+            f"Source: {res['source']}\n"
+            f"⭐️ Confidence: {res['confidence']}/5"
+        )
+        total_confidence += res["confidence"]
+
+    avg_confidence = total_confidence / len(questions)
+    final_answer = "\n\n".join(answers)
+    conversation_context["last_answer"] = final_answer
+
+    return {
+        "answer": final_answer,
+        "confidence": float(round(avg_confidence, 2))
+    }
+
+# === CLI Mode ===
+if __name__ == "__main__":
+    while True:
+        question = input("Ask a legal question (or 'exit' to quit): ").strip()
+        if question.lower() == 'exit':
+            break
+        if question:
+            print("\n🤖 AinnAssist is thinking...\n")
+            result = asyncio.run(answer_query(question))
+            print(f"\nAnswer:\n{result['answer']}")
+			
+			
+# app.py
+
+
+import re
+from fastapi import FastAPI, Response
+from pydantic import BaseModel
+from connect_memory_with_llm import answer_query
+
+app = FastAPI()
+
+# === Request Model ===
+class QueryRequest(BaseModel):
+    question: str
+
+# === Root Check Endpoint ===
+@app.get("/")
+async def root():
+    return Response(status_code=204)
+
+# === Legal Question Answering Endpoint ===
+@app.post("/ask")
+async def ask_question(data: QueryRequest):
+    try:
+        result = await answer_query(data.question)
+        answer = str(result["answer"])
+
+        # Clean the LLM response
+        cleaned = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL)
+        cleaned = re.sub(r"additional_kwargs=\{\s*.*?\s*\}", "", cleaned, flags=re.DOTALL)
+        cleaned = re.sub(r"response_metadata=\{\s*.*?\s*\}", "", cleaned, flags=re.DOTALL)
+        cleaned = cleaned.replace(r'\n', '\n').strip()
+
+        return {
+            "question": data.question,
+            "answer": cleaned,
+            "confidence": result["confidence"],
+            "sources": [line.split("Source: ")[1] for line in cleaned.split("\n\n") if "Source: " in line]
+        }
+    except Exception as e:
+        return {"error": str(e)}
+		
+# telegram_bot.py
+
+import os
+import requests
+import speech_recognition as sr
+from pydub import AudioSegment
+from PIL import Image
+import torch
+from transformers import BlipProcessor, BlipForConditionalGeneration
+from gtts import gTTS
+from telegram import Update 
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    CommandHandler,
+    MessageHandler,
+    filters
+)
+from dotenv import load_dotenv
+from deep_translator import GoogleTranslator
+from langdetect import detect
+
+# === Load environment variables ===
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_URL = os.getenv("API_URL")
+FFMPEG_PATH = os.getenv("FFMPEG_PATH")
+FFPROBE_PATH = os.getenv("FFPROBE_PATH")
+
+# === Set FFmpeg path for pydub ===
+AudioSegment.converter = FFMPEG_PATH
+AudioSegment.ffprobe = FFPROBE_PATH
+
+# === Load BLIP image captioning model ===
+print("[INFO] Loading BLIP image captioning model...")
+processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+print("[INFO] BLIP model loaded.")
+
+# === Generate Caption from Image ===
+def generate_image_caption(image_path):
+    image = Image.open(image_path).convert("RGB")
+    inputs = processor(image, return_tensors="pt")
+    with torch.no_grad():
+        out = model.generate(**inputs)
+    caption = processor.decode(out[0], skip_special_tokens=True)
+    return caption.strip()
+
+# === Language Tag ===
+def get_language_tag(lang_code: str) -> str:
+    return {
+        "bn": "🔤 Detected Language: Bangla 🇧🇩",
+        "en": "🔤 Detected Language: English 🇬🇧"
+    }.get(lang_code, "🔤 Detected Language: Unknown ❓")
+
+# === Split long messages to avoid Telegram's 4096-character limit ===
+async def send_long_message(update: Update, text: str, max_length=4096):
+    if len(text) <= max_length:
+        await update.message.reply_text(text)
+        return
+    parts = []
+    current_part = ""
+    for line in text.split("\n"):
+        if len(current_part) + len(line) + 1 <= max_length:
+            current_part += line + "\n"
+        else:
+            parts.append(current_part.strip())
+            current_part = line + "\n"
+    if current_part:
+        parts.append(current_part.strip())
+    for part in parts:
+        await update.message.reply_text(part)
+
+# === /start Command ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Hello! Send your legal question as text, voice, or image.")
+
+# === Handle Text Message ===
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    question = update.message.text
+    try:
+        # Detect language
+        lang = detect(question)
+        question_to_api = question
+
+        # If Bangla, translate to English
+        if lang == "bn":
+            question_to_api = GoogleTranslator(source='bn', target='en').translate(question)
+            await update.message.reply_text(f"🗣 Transcribed: {question}\n{get_language_tag(lang)}")
+
+        # Send to FastAPI
+        res = requests.post(API_URL, json={"question": question_to_api})
+        res.raise_for_status()
+        response_data = res.json()
+        answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
+        confidence = response_data.get("confidence", 5.0)
+
+        # If input was Bangla, translate answer back to Bangla
+        if lang == "bn":
+            answer = GoogleTranslator(source='en', target='bn').translate(answer)
+        
+        await send_long_message(update, f"📜 Answer:\n{answer}\n\n⭐ Confidence: {confidence}/5")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
+# === Handle Voice Message ===
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    file = await update.message.voice.get_file()
+    ogg_path = "voice.ogg"
+    wav_path = "voice.wav"
+    await file.download_to_drive(ogg_path)
+
+    sound = AudioSegment.from_file(ogg_path)
+    sound.export(wav_path, format="wav")
+
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(wav_path) as source:
+        audio = recognizer.record(source)
+
+    try:
+        raw_text = recognizer.recognize_google(audio, language="en-US").lower()
+    except:
+        await update.message.reply_text("❌ Could not understand the voice message.")
+        return
+
+    if raw_text.startswith("bangla") or raw_text.startswith("বাংলা"):
+        try:
+            bn_text = recognizer.recognize_google(audio, language="bn-BD")
+            final_text = bn_text.lstrip("বাংলা").lstrip("Bangla").strip()
+            lang = "bn"
+        except:
+            await update.message.reply_text("❌ Could not transcribe in Bangla.")
+            return
+    else:
+        try:
+            final_text = recognizer.recognize_google(audio, language="en-US")
+            lang = "en"
+        except:
+            await update.message.reply_text("❌ Could not transcribe in English.")
+            return
+
+    if not final_text.endswith("?"):
+        final_text += "?"
+
+    await update.message.reply_text(f"🗣 Transcribed: {final_text}\n{get_language_tag(lang)}")
+
+    try:
+        # Translate to English if Bangla
+        question_to_api = final_text
+        if lang == "bn":
+            question_to_api = GoogleTranslator(source='bn', target='en').translate(final_text)
+
+        # Send to FastAPI
+        res = requests.post(API_URL, json={"question": question_to_api})
+        res.raise_for_status()
+        response_data = res.json()
+        answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
+        confidence = response_data.get("confidence", 5.0)
+
+        # Translate answer to Bangla if input was Bangla
+        if lang == "bn":
+            answer = GoogleTranslator(source='en', target='bn').translate(answer)
+
+        # Convert answer to voice
+        tts = gTTS(answer, lang=lang)
+        tts.save("response.mp3")
+        sound = AudioSegment.from_mp3("response.mp3")
+        sound.export("response.ogg", format="ogg", codec="libopus")
+
+        # Send as voice
+        with open("response.ogg", "rb") as voice_file:
+            await update.message.reply_voice(voice=voice_file, caption=f"⭐ Confidence: {confidence}/5")
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+    finally:
+        for f in ["voice.ogg", "voice.wav", "response.mp3", "response.ogg"]:
+            if os.path.exists(f):
+                os.remove(f)
+
+# === Handle Photo/Image Message ===
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo = update.message.photo[-1]
+    image_path = "photo.jpg"
+    await (await photo.get_file()).download_to_drive(image_path)
+
+    try:
+        caption = generate_image_caption(image_path)
+        detailed_prompt = (
+            f"Describe in detail what is happening in the following image:\n{caption}\n\n"
+            "Now, Based on this description, which law in Bangladesh is potentially being violated, and what type of punishment could apply under that law, including how many years of imprisonment or how much fine may be imposed?"
+        )
+        await send_long_message(update, f"🖼 Processing image and asking AI:\n{detailed_prompt}")
+        res = requests.post(API_URL, json={"question": detailed_prompt})
+        res.raise_for_status()
+        response_data = res.json()
+        answer = response_data.get("answer", "❌ Sorry, couldn't find an answer.")
+        confidence = response_data.get("confidence", 5.0)
+        await send_long_message(update, f"📜 AI Answer:\n{answer}\n\n⭐ Confidence: {confidence}/5")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error processing image: {str(e)}")
+
+# === Main function to run the bot ===
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    print("🤖 Bot is running...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
+	
+	
+# .env
+
+GROQ_API_KEY=your_api_key_here
+
+
+

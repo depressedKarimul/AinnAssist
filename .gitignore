@@ -1,0 +1,9 @@
+.env
+vectorstore/
+data/
+*.pyc
+__pycache__/
+*.ogg
+*.wav
+*.mp3
+*.jpg
