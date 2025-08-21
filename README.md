@@ -85,6 +85,7 @@ The system integrates multiple components to process legal queries:
 7. **Error Handling**: Provides fallback error messages for missing documents or LLM failures using Python and LangChain.
 
 ![Answer Generation Process](images/image6.png)  
+![Answer Generation Process](images/image66.png)  
 *Flowchart of the answer generation process, from query input to cited response.*
 
 ## AinnAssist Features
@@ -204,7 +205,7 @@ To set up AinnAssist locally, follow these steps:
 
 1. **Clone the Repository**:
    ```bash
-   git clone https://github.com/your-repo/ainnassist.git
+   git clone https://github.com/depressedKarimul/AinnAssist.git
    cd ainnassist
    ```
 
