@@ -62,6 +62,7 @@ The system integrates multiple components to process legal queries:
 - **Output**: Delivers cited, multilingual responses with confidence scores.
 
 ![System Architecture](images/image4.png)  
+![System Architecture](images/image444.png)  
 *Diagram of AinnAssist’s system architecture, showing Telegram, FastAPI, and LLM integration.*
 
 ## Data Processing & Embedding
